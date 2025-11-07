@@ -32,7 +32,7 @@ agno_db = MongoDb(
 # Configure session summary manager with custom prompt for short titles
 session_summary_manager = SessionSummaryManager(
     model=Gemini(id="gemini-2.0-flash-exp"),  # Use faster model for summaries
-    session_summary_prompt="Create a very short 3-5 word title that captures the essence of this conversation. Be concise and descriptive.",
+    session_summary_prompt="Generate a title with 3–5 words only. Must not exceed 5 words. Keep it concise and descriptive. No sentences. No extra explanation.",
 )
 
 # MCP Tools
@@ -222,6 +222,38 @@ async def get_session(user: Dict[str, Any] = Depends(get_current_user)):
         }
     }
 
+# Session summaries endpoint
+class SessionSummariesRequest(BaseModel):
+    session_ids: list[str]
+    db_id: str
+
+@app.post("/sessions/summaries")
+async def get_session_summaries(
+    request: SessionSummariesRequest,
+    user: Dict[str, Any] = Depends(get_current_user),
+    db = Depends(get_db)
+):
+    """Get summaries for multiple sessions"""
+    try:
+        # Query MongoDB directly for session summaries
+        sessions = await db.agent_sessions.find(
+            {
+                "session_id": {"$in": request.session_ids},
+                "user_id": user["user_id"]  # Security: Only return user's own sessions
+            },
+            {"session_id": 1, "summary": 1}  # Only return session_id and summary fields
+        ).to_list(length=None)
+        
+        # Convert to dict mapping session_id to summary
+        summaries = {
+            session["session_id"]: session.get("summary", {})
+            for session in sessions
+        }
+        
+        return summaries
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch summaries: {str(e)}")
+
 # Custom route (existing)
 @app.post("/customers")
 async def get_customers():
@@ -237,6 +269,39 @@ async def get_customers():
             "email": "jane.doe@example.com",
         },
     ]
+
+# Custom endpoint to fetch session summaries directly from MongoDB
+@app.get("/sessions/summaries")
+async def get_session_summaries(
+    session_ids: str,  # Comma-separated session IDs
+    user: Dict[str, Any] = Depends(get_current_user)
+):
+    """
+    Fetch summaries for multiple sessions from MongoDB.
+    This endpoint directly queries MongoDB to get the summary field that Agno doesn't expose.
+    """
+    try:
+        # Parse comma-separated session IDs
+        ids = [sid.strip() for sid in session_ids.split(',') if sid.strip()]
+        
+        # Query MongoDB directly for summaries
+        db = mongodb.get_db()
+        sessions = await db.agent_sessions.find(
+            {
+                "session_id": {"$in": ids},
+                "user_id": user["user_id"]  # Security: only return user's own sessions
+            },
+            {
+                "session_id": 1,
+                "summary": 1,
+                "_id": 0
+            }
+        ).to_list(length=len(ids))
+        
+        # Return as a dictionary for easy lookup
+        return {session["session_id"]: session.get("summary") for session in sessions}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch summaries: {str(e)}")
 
 # Setup AgentOS - it will handle user_id and session_id automatically
 agent_os = AgentOS(
