@@ -254,6 +254,78 @@ async def get_session_summaries(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch summaries: {str(e)}")
 
+# Prompt Library endpoints
+class SavePromptRequest(BaseModel):
+    prompt: str
+    tags: Optional[list[str]] = None
+
+@app.post("/prompts/save")
+async def save_prompt(
+    request: SavePromptRequest,
+    user: Dict[str, Any] = Depends(get_current_user),
+    db = Depends(get_db)
+):
+    """Save a prompt to user's library"""
+    try:
+        prompt_doc = {
+            "user_id": user["user_id"],
+            "prompt": request.prompt,
+            "tags": request.tags or [],
+            "created_at": datetime.utcnow().isoformat(),
+        }
+        
+        result = await db.saved_prompts.insert_one(prompt_doc)
+        
+        return {
+            "success": True,
+            "id": str(result.inserted_id),
+            "message": "Prompt saved successfully"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save prompt: {str(e)}")
+
+@app.get("/prompts")
+async def get_prompts(
+    user: Dict[str, Any] = Depends(get_current_user),
+    db = Depends(get_db)
+):
+    """Get all saved prompts for the current user"""
+    try:
+        prompts = await db.saved_prompts.find(
+            {"user_id": user["user_id"]},
+            {"user_id": 1, "prompt": 1, "tags": 1, "created_at": 1}
+        ).sort("created_at", -1).to_list(length=None)
+        
+        # Convert ObjectId to string for JSON serialization
+        for prompt in prompts:
+            prompt["_id"] = str(prompt["_id"])
+        
+        return prompts
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch prompts: {str(e)}")
+
+@app.delete("/prompts/{prompt_id}")
+async def delete_prompt(
+    prompt_id: str,
+    user: Dict[str, Any] = Depends(get_current_user),
+    db = Depends(get_db)
+):
+    """Delete a saved prompt"""
+    try:
+        from bson import ObjectId
+        
+        result = await db.saved_prompts.delete_one({
+            "_id": ObjectId(prompt_id),
+            "user_id": user["user_id"]  # Security: only delete user's own prompts
+        })
+        
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="Prompt not found")
+        
+        return {"success": True, "message": "Prompt deleted successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete prompt: {str(e)}")
+
 # Custom route (existing)
 @app.post("/customers")
 async def get_customers():
